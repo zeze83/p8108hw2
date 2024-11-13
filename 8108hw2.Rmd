@@ -1,0 +1,236 @@
+---
+title: "8108hw2"
+author: "Ze Li"
+output: pdf_document
+---
+
+```{r, message=FALSE}
+library(dplyr)
+library(survival)
+library(survminer)
+#if (!require("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("Icens")a
+```
+
+```{r load data}
+data=read.csv("MIstudy.csv",header=TRUE)
+head(data)
+```
+
+\newpage
+
+# Question 1: Logrank and Score Tests for MI Study
+
+## (a) Produce a plot showing the estimated Kaplan-Meier survival functions for the endpoint of death for those who are obese or overweight (BMI>=25), as compared to those of normal weight (which we will define here as BMI<25). What percent of the 500 patients are either overweight or obese? What do you notice about the censoring pattern
+
+```{r 1a, fig.width=7, fig.height=5}
+sum(data$bmicat %in% c(2, 3))
+sum(data$obese_ovwt == 1)
+
+data = data |>
+  mutate(dthtime = as.numeric(dthtime))
+
+surv_object <- Surv(data$dthtime, data$dthstat)
+km_fit <- survfit(surv_object ~ obese_ovwt, data = data)
+summary(km_fit)
+ggsurvplot(km_fit, data = data, 
+           risk.table = TRUE, 
+           pval = TRUE, 
+           conf.int = TRUE,
+           xlab = "Time (Months)", 
+           ylab = "Survival Probability",
+           legend.title = "BMI Category",
+           title = "Kaplan-Meier Survival Curves by BMI Category")
+```
+
+The percentage of the 500 patients are either overweight or obese is `r 302/500*100`%.
+
+there are tick marks along the curves and are distributed across the timeline, showing that censored observations occur at different time points. There are three parts of censoring data that around 15, 40, and 65.
+
+## (b) Calculate both a logrank test and Wilcoxon test of the effect of being overweight/obese on the risk of death, using either the CMH approach or a linear rank test (state which approach you have used). Which of these two tests yields a larger test statistic? Could you have predicted that based on the KM plot from (a)?
+
+```{r 1b}
+logrank_test <- survdiff(surv_object ~ obese_ovwt, data = data)
+wilcoxon_test <- survdiff(surv_object ~ obese_ovwt, data = data, rho = 1) # rho = 1 gives the Wilcoxon test
+logrank_test
+wilcoxon_test
+```
+
+The logrank test and Wilcoxon test are both linear rank tests. 
+
+We can see that logrank test results in 41.4 chisq and Wilcoxon test results in 42.6. Thus, the Wilcoxon test yields a slightly larger test statistic compared to the log-rank test. 
+
+The Normal Weight group (red curve) shows a steeper decline in survival probability early on, starting within the first few months; while the Obese or Overweight group (blue curve) has a less steep initial decline, suggesting that fewer events are happening early. The Wilcoxon test weight more on early so that we can see from the graph that it should be larger than logrank test.
+
+## (c) Calculate the Fleming-Harrington test statistic for comparing survival distributions under several different combinations of p and q:
+
+i. Setting p and q both to 0
+ii. Setting p to 1 and q to 0
+iii. Setting p and q both to 1
+
+## How do these compare to the logrank tests and Wilcoxon tests in (b)? When would you expect them to be more or less powerful than the logrank test in (b)?
+
+```{r 1c}
+surv_object <- Surv(data$dthtime, data$dthstat)
+fh_test_1 <- FHtest::FHtestrcc(surv_object ~ obese_ovwt, 
+                               data = data, rho = 0, lambda = 0)
+fh_test_2 <- FHtest::FHtestrcc(surv_object ~ obese_ovwt, 
+                               data = data, rho = 0, lambda = 1)
+fh_test_3 <- FHtest::FHtestrcc(surv_object ~ obese_ovwt, 
+                               data = data, rho = 1, lambda = 1)
+
+fh_test_1
+fh_test_2
+fh_test_3
+```
+
+All the FH tests yield similar Z-statistic and p-value. This consistency implies that survival differences are robust across all parts of the survival curve. 
+
+When all time intervals are equally weighted rho=0 lambda =0, the strongest signal is detected. When focusing on late events rho=0, lambda=1, the signal is still significant but slightly weaker. A balanced approach rho=1, lambda=1 captures significant differences across both early and late times, but with a slightly reduced Z-statistic.
+
+The FH test 1 directly corresponds to the logrank test, and the results match exactly. The Wilcoxon test gives more weight to early events, similar to the FH test 2.
+
+## (d) Ignoring the times of death, conduct a test of whether the proportions of deaths during follow-up differ for those who are overweight/obese versus those of normal weight (using a logistic regression model or based on analysis of a 2x2 table). Does this test yield similar conclusions to the tests in parts (b) and (c)? When would you expect the survival analysis to be more powerful than the comparison of proportions of deaths in the two subgroups?
+
+```{r 1d}
+table_bmi_death <- table(data$obese_ovwt, data$dthstat)
+fisher_test <- fisher.test(table_bmi_death)
+fisher_test
+logistic_model <- glm(dthstat ~ obese_ovwt, 
+                      data = data, family = binomial)
+summary(logistic_model)
+exp(cbind(Odds_Ratio = coef(logistic_model), confint(logistic_model)))
+```
+
+Under fisher test, we have p-value is `r round(fisher_test$p.value,2)` which is smaller than 0.05 with odd ratio of `r round(fisher_test$estimate,2)`. The test indicates that there is a significant difference in the proportions of deaths between the Normal Weight and Obese groups. The odd ratio of 0.31 suggests that those in the Obese group had much lower odds of dying compared to those in the Normal Weight group.
+
+Since tests in (b) also suggest a significant difference in survival between the two groups with very small p-value. Thus, test in (d) has similar conclusion with tests in (b), both indicate a strong association between BMI category and risk of death. Furthermore, the Obese group has a lower risk of death compared to the Normal Weight group.
+
+Survival analysis is more powerful when the timing of the event matters. This is because survival analysis takes into account both the occurrence and timing of deaths.
+
+\newpage
+
+# Question 2: Cox Model for Myocardial Infarction Study
+
+## (a) Fit a Cox proportional hazards model to evaluate the association of being overweight/obese with survival time, with ‘obese ovwt’ as the only covariate (i.e. unadjusted). Use the discrete option for ties. Provide the Wald, Score, and LR tests for the comparison of survival distributions after MI for overweight/obese vs normal weight. Are any of these test statistics the same as either the logrank or Wilcoxon test statistics from 1(b)?
+
+```{r 2a}
+cox_model <- coxph(Surv(data$dthtime, data$dthstat) ~ obese_ovwt, 
+                   data = data, ties = "exact")
+summary(cox_model)
+
+wald_test <- summary(cox_model)$waldtest
+score_test <- summary(cox_model)$sctest
+lr_test <- summary(cox_model)$logtest
+wald_test
+score_test
+lr_test
+```
+
+The wald test is about 39, the score test is about 41.4. and the LR test is about 39.06, which all have p-value close to 0.
+
+We can see that the score test is close to 1(b), they are testing the same whether there is a significant difference in survival distributions between the normal weight and overweight/obese groups.
+
+However, the Wald test examines the estimated coefficient in the Cox model, which is the effect of being overweight/obese on the hazard of death. And the Likelihood Ratio test compares the fit of the full model to a null model that without any covariates. But they stil have similar results with 1(b).
+
+## (b) Now fit an adjusted Cox proportional hazards model for evaluating the effect of ‘obese ovwt’, adjusting for the effects of age, gender, systolic blood pressure (sysbp), and type of MI (mitype). Summarize the effect of overweight/obesity on survival of MI patients using both the unadjusted and adjusted hazard ratios and 95% confidence intervals. Write a short (1-2 sentence) interpretation of the HR for overweight/obesity on mortality making sure to indicate both the magnitude and direction of effect (protective or adverse effect), and whether adjustment for other covariates makes any difference.
+
+```{r 2b}
+data$mitype <- as.factor(data$mitype)
+
+cox_adjusted <- coxph(Surv(data$dthtime, data$dthstat) ~ obese_ovwt + age + gender + sysbp + mitype, data = data)
+summary(cox_adjusted)
+
+unadjusted_hr <- exp(cbind(HR = coef(cox_model), confint(cox_model)))
+exp(cbind(HR = coef(cox_adjusted), confint(cox_adjusted)))
+```
+
+In the unadjusted model, the hazard ratio of 0.42 indicates that overweight/obese individuals have a 58% lower risk of death compared to normal weight individuals. This suggests a protective effect of being overweight/obese on survival following MI, and the effect is statistically significant as the confidence interval does not include 1.
+
+After adjusting for age, gender, systolic blood pressure, and type of MI, the hazard ratio for overweight/obesity increases to 0.64, indicating that overweight/obese individuals still have a 36% lower risk of death compared to those with normal weight. The protective effect remains statistically significant as the confidence interval (0.48, 0.85) does not include 1. However, the effect is less pronounced after adjusting for these covariates, suggesting that part of the initial protective effect observed in the unadjusted model is explained by the other factors.
+
+## (c) Compare the following test statistics for the effect of overweight/obesity on the risk of death by fitting the following models (don’t worry about adjusting for any other covariates):
+
+i. Test for ‘obese ovwt’ from Cox PH model, stratifying by gender.
+ii. Test for ‘obese ovwt’ from Cox PH model, controlling for gender.
+iii. Logrank test for ‘obese ovwt’, stratifying by gender.
+
+## For each part, state which test statistic you use (Score, LR, Wald). How do the test statistics from (i)-(iii) compare? Do we gain any power by controlling for gender rather than stratifying by it?
+
+### i. Test for ‘obese ovwt’ from Cox PH model, stratifying by gender.
+
+```{r 2ci}
+cox_stratified <- coxph(surv_object ~ obese_ovwt + strata(gender), data = data)
+summary(cox_stratified)
+
+score_test_stratified <- summary(cox_stratified)$sctest
+score_test_stratified
+```
+
+The Score test is used because it compares the observed events death to the expected events within each stratum, while accounting for the fact that the baseline hazards may be different between stratum.
+
+### ii. Test for ‘obese ovwt’ from Cox PH model, controlling for gender.
+
+```{r 2cii}
+cox_control_gender <- coxph(surv_object ~ obese_ovwt + gender, data = data)
+summary(cox_control_gender)
+
+wald_test_controlled <- summary(cox_control_gender)$waldtest
+wald_test_controlled
+```
+
+The Wald test is used to test the significance of the coefficients in this model, including the effect of obese_ovwt. Since we control the gender variable, we use the Wald test.
+
+### iii. Logrank test for ‘obese ovwt’, stratifying by gender.
+
+```{r 2ciii}
+logrank_test_stratified <- survdiff(surv_object ~ obese_ovwt + strata(gender), data = data)
+
+logrank_statistic <- logrank_test_stratified$chisq
+logrank_statistic
+```
+
+i and iii are both stratify by gender, and the test statistics (35.48 and 35.47) are nearly identical. However, ii has higher test statistics than the other 2 methods, suggesting that controlling for gender yields a higher test statistic.
+
+Controlling for gender provides more power than stratifying by it. When we control for gender, we assume that its effect is consistent across all individuals, which allows us to estimate a single baseline hazard for the entire cohort. This approach uses the data more efficiently and maximizes the information from the sample, leading to a higher test statistic. By contrast, when we stratify by gender, the model estimates a different baseline hazard for each gender, which divides the dataset into strata and reduces the overall sample size for each stratum.
+
+## (d) Briefly comment on any advantages or disadvantages of stratifying by gender rather than controlling for gender in part (c) above. Are there any additional analyses you would suggest doing to check whether the stratified analysis is appropriate?
+
+Stratifying by gender allows the model to accommodate different baseline hazards for each gender, providing flexibility and robustness when the risk of death is expected to differ significantly between male and female. However, stratification can lead to a loss of statistical power, as the dataset is divided into separate strata, reducing the effective sample size for each group. 
+
+Controlling for gender as a covariate in the model allows for the use of the entire dataset when estimating the baseline hazard, which increases statistical power. Nevertheless, it requires assuming that the effect of gender is proportional and consistent across all individuals, which may not be appropriate in all cases. If the proportional hazards assumption for gender is violated, this model could produce biased estimates. 
+
+```{r 2d}
+# check proportional hazards assumption for the model controlling for gender
+cox.zph(cox_control_gender)
+
+# fit a Cox model with interaction between gender and obese_ovwt
+cox_interaction <- coxph(surv_object ~ obese_ovwt * gender, data = data)
+summary(cox_interaction)
+```
+
+\newpage
+
+# Question 3: Myocardial Infarction Study
+
+
+\newpage
+
+# Question 4: Impact of Ties on Cox Model Estimation and Testing
+
+```{r 4}
+surv_object <- Surv(data$dthtime, data$dthstat)
+cox_breslow <- coxph(surv_object ~ gender, data = data, ties = "breslow")
+cox_efron <- coxph(surv_object ~ gender, data = data, ties = "efron")
+cox_exact <- coxph(surv_object ~ gender, data = data, ties = "exact")
+summary(cox_breslow)
+summary(cox_efron)
+summary(cox_exact)
+```
+
+The coefficient for gender, HR, and the test statistics Likelihood Ratio, Wald, and Score tests are very similar across all three methods.
+
+The HR values range from 1.464 to 1.466, and the p-values for the Wald test are all approximately 0.006, indicating a statistically significant effect of gender on survival.
+
+The small differences in test statistics and parameter estimates across the methods suggest that ties are not an important issue in this study.
